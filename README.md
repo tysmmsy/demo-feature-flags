@@ -20,6 +20,118 @@ Vercel Feature FlagsとFlags SDKを使用したデモアプリケーションで
 - Vercel Toolbar (@vercel/toolbar)
 - Vercel Adapter (@sveltejs/adapter-vercel)
 
+---
+
+## Vercel Dashboardでの設定手順
+
+コードのデプロイ後、Vercel Dashboardで以下の設定を行います。
+
+### Step 1: FLAGS_SECRETの設定
+
+FLAGS_SECRETはVercel Toolbarからフラグをオーバーライドする際の暗号化/復号に使用されるシークレットキーです。
+Dashboardでフラグを作成・管理する操作自体には不要ですが、Toolbarでの動作確認に必須のため最初に設定します。
+
+1. ターミナルでシークレットキーを生成します
+   ```
+   node -e "console.log(crypto.randomBytes(32).toString('base64url'))"
+   ```
+2. Vercel Dashboard > プロジェクト > Settings > Environment Variablesに移動します
+3. 「Add New」をクリックします
+4. Key: `FLAGS_SECRET`、Value: 生成した値を入力します
+5. Environment: Production / Preview / Developmentの3つすべてにチェックを入れます
+6. 「Save」をクリックします
+7. 設定を反映するためにデプロイを実行します(GitHubにプッシュするか、Deployments > Redeploy)
+
+### Step 2: フラグの作成
+
+1. Vercel Dashboard > プロジェクト > 左メニューの「Flags」タブをクリックします
+2. 「Create Flag」をクリックします
+
+show-new-designフラグ(Boolean型):
+- Slug: `show-new-design`
+- Type: Boolean
+- Description: 新デザインの表示切り替え
+- 「Create」をクリックします
+
+banner-textフラグ(String型):
+- Slug: `banner-text`
+- Type: String
+- Variants: `spring`(Spring Campaign) / `summer`(Summer Campaign) / `none`(No Banner)
+- 「Create」をクリックします
+
+### Step 3: フラグ値の環境別設定
+
+作成したフラグをクリックし、「Configuration」タブで各環境の値を設定します。
+
+show-new-designの設定例:
+- Production: Static Value → `false`(旧デザインを表示)
+- Preview: Static Value → `true`(新デザインでテスト)
+- Development: Reuse Preview Config
+
+banner-textの設定例:
+- Production: Static Value → `none`(バナーなし)
+- Preview: Static Value → `spring`(春キャンペーンでテスト)
+- Development: Reuse Preview Config
+
+「Save」をクリックすると、再デプロイなしで即座に反映されます。
+
+### Step 4: ターゲティングルールの設定(任意)
+
+ユーザーの属性に基づいてフラグ値を切り替えたい場合:
+
+1. フラグのConfigurationタブを開きます
+2. 「Add Rule」をクリックします
+3. 条件を設定します(例: メールアドレスが特定ドメインで終わる場合のみtrue)
+4. マッチした場合の値とフォールバック値を設定します
+5. 「Save」をクリックします
+
+---
+
+## 検証手順
+
+### 手順1: デフォルト状態の確認
+
+Production URLにアクセスし、以下を確認します。
+
+- 「現在のフラグ値」テーブルでshow-new-designがfalse、banner-textがnoneになっている
+- リスト形式の旧デザインが表示されている
+- キャンペーンバナーが表示されていない
+
+### 手順2: Vercel Toolbarからshow-new-designを切り替え
+
+1. ページ下部に表示されているVercel Toolbarを開きます
+2. Flagsアイコン(旗マーク)をクリックします
+3. show-new-designをtrueに切り替えます
+4. ページが再読み込みされ、カード形式の新デザインに切り替わることを確認します
+
+ToolbarはVercelチームメンバーとしてログインしている場合のみ表示されます。
+
+### 手順3: banner-textを切り替え
+
+1. Vercel ToolbarのFlagsアイコンを再度クリックします
+2. banner-textを `spring` に変更します
+3. ピンク色の「春キャンペーン: 全品20%オフ!」バナーが表示されることを確認します
+4. banner-textを `summer` に変更します
+5. ブルーの「夏キャンペーン: 5,000円以上で送料無料!」バナーに切り替わることを確認します
+
+### 手順4: Dashboardからフラグ値を変更(再デプロイなし)
+
+1. Vercel Dashboard > プロジェクト > Flagsタブを開きます
+2. show-new-designのProduction値をtrueに変更します
+3. Production URLをリロードします
+4. 再デプロイしていないのに、カード形式の新デザインに切り替わることを確認します
+5. 値をfalseに戻すと、リスト形式に戻ることを確認します
+
+### 手順5 (任意): ブラウザ間の独立性を確認
+
+1. 2つの異なるブラウザ(またはシークレットウィンドウ)で同じURLを開きます
+2. 片方のブラウザでのみVercel Toolbarからフラグをオーバーライドします
+3. オーバーライドした側のみUIが変化し、もう片方は影響を受けないことを確認します
+
+Toolbarのオーバーライドは各ブラウザのCookieにFLAGS_SECRETで暗号化して保存されるため、他のユーザーに影響しません。
+
+---
+
 ## ファイル構成と変更箇所
 
 ```
@@ -34,9 +146,9 @@ vite.config.ts            # Vercel Toolbarプラグイン追加（変更）
 package.json              # flags, @vercel/toolbar 追加（変更）
 ```
 
-## 実装の解説
+## ソースコードの実装解説
 
-### 1. パッケージの追加 (package.json)
+### 1. パッケージの追加
 
 ```bash
 pnpm add flags @vercel/toolbar @sveltejs/adapter-vercel
@@ -45,7 +157,8 @@ pnpm add flags @vercel/toolbar @sveltejs/adapter-vercel
 ### 2. フラグの定義 (src/lib/flags.ts)
 
 `flag()` でフラグを定義します。
-`key` がフラグの識別子、`options` がToolbarやFlags Explorerに表示される選択肢です。
+`key` はDashboardのSlugと一致させます。
+`options` はToolbarのFlags Explorerに表示される選択肢です。
 
 ```typescript
 import { flag } from 'flags/sveltekit';
@@ -83,7 +196,9 @@ export const bannerText = flag<string>({
 ### 3. サーバーフックの設定 (src/hooks.server.ts)
 
 `createHandle()` でFlags SDKをSvelteKitに統合します。
-`/.well-known/vercel/flags` エンドポイントが自動で作成され、Flags Explorerがフラグを検出できるようになります。
+以下の機能が有効になります:
+- `/.well-known/vercel/flags` エンドポイントが自動作成されます(Flags Explorerがフラグを検出するために使用)
+- ToolbarのオーバーライドCookieがFLAGS_SECRETで復号されます
 
 ```typescript
 import { createHandle } from 'flags/sveltekit';
@@ -119,7 +234,7 @@ export const load: PageServerLoad = async () => {
 
 ### 5. クライアントサイドでの条件分岐 (src/routes/+page.svelte)
 
-フラグの値に応じてUIを切り替えます。
+サーバーから受け取ったフラグの値に応じてUIを切り替えます。
 
 ```svelte
 <script lang="ts">
@@ -154,107 +269,7 @@ export default defineConfig({
 });
 ```
 
-## セットアップ
-
-### インストール
-
-```
-pnpm install
-```
-
-### ローカル開発
-
-```
-pnpm dev
-```
-
-### ビルド
-
-```
-pnpm build
-```
-
-## 環境変数
-
-以下の環境変数の設定が必要です。
-
-### FLAGS_SECRET
-
-Flags SDKがToolbarオーバーライドの暗号化/復号に使用するシークレットキーです。
-
-生成方法:
-
-```
-node -e "console.log(crypto.randomBytes(32).toString('base64url'))"
-```
-
-## Vercel Dashboardからの設定手順
-
-### FLAGS_SECRETの設定
-
-1. Vercel Dashboardでプロジェクトを開きます
-2. Settings > Environment Variablesに移動します
-3. 「Add New」をクリックします
-4. Key: `FLAGS_SECRET`、Value: 生成したシークレット値を入力します
-5. Production / Preview / Developmentの3つすべてにチェックを入れます
-6. 「Save」をクリックします
-
-設定後、デプロイを実行して反映させてください。
-
-### フラグの作成と管理
-
-1. Vercel Dashboardでプロジェクトを開きます
-2. 左メニューの「Flags」タブをクリックします
-3. 「Create Flag」をクリックします
-4. フラグ情報を入力します
-   - show-new-designの場合: Slug: `show-new-design`、Type: Boolean
-   - banner-textの場合: Slug: `banner-text`、Type: String、Variants: `spring` / `summer` / `none`
-5. 「Create」をクリックします
-6. 作成したフラグをクリックし、「Configuration」タブで各環境の値を設定します
-   - Production: Static Value → 任意の値
-   - Preview: Static Value → テスト用の値
-7. 「Save」をクリックします
-
-フラグ値の変更は再デプロイなしで即座に反映されます。
-
-## 検証手順
-
-### 手順1: 本番URLにアクセスしてデフォルト状態を確認
-
-デプロイ済みのProduction URLにアクセスします。
-デフォルトの状態では以下のようになっていることを確認してください。
-
-- show-new-designがfalse
-- banner-textがnone
-- リスト形式の旧デザインが表示されている
-- キャンペーンバナーが表示されていない
-
-### 手順2: Vercel Toolbarからshow-new-designを切り替え
-
-1. ページ下部に表示されているVercel Toolbarを開きます
-2. Flagsアイコンをクリックします
-3. show-new-designをtrueに切り替えます
-4. ページが再読み込みされ、カード形式の新デザインに切り替わることを確認します
-
-### 手順3: banner-textを切り替え
-
-1. Vercel ToolbarのFlagsアイコンを再度クリックします
-2. banner-textを "spring" に変更します
-3. ピンク色の春キャンペーンバナーが表示されることを確認します
-4. banner-textを "summer" に変更します
-5. ブルーの夏キャンペーンバナーに切り替わることを確認します
-
-### 手順4: Vercel Dashboardからフラグを変更
-
-1. Vercel DashboardでプロジェクトのFlagsタブを開きます
-2. フラグの値を変更します
-3. 再デプロイなしで変更が反映されることを確認します
-
-### 手順5 (任意): ブラウザ間の独立性を確認
-
-1. 2つの異なるブラウザ(またはシークレットウィンドウ)でページを開きます
-2. 片方のブラウザでのみVercel Toolbarからフラグをオーバーライドします
-3. オーバーライドした側のみUIが変化し、もう片方は影響を受けないことを確認します
+---
 
 ## フラグの評価フロー
 
@@ -275,10 +290,18 @@ node -e "console.log(crypto.randomBytes(32).toString('base64url'))"
 5. コンポーネントが値に基づいて条件付きレンダリング
 ```
 
+## セットアップ(ローカル開発)
+
+```
+pnpm install
+pnpm dev
+```
+
 ## セキュリティに関する注意事項
 
 - FLAGS_SECRETは外部に公開しないでください。
-  この値が漏洩すると、第三者がフラグ値を改ざんできる可能性があります
+  この値が漏洩すると、第三者がToolbar経由でフラグ値を改ざんできる可能性があります
 - FLAGS_SECRETはサーバーサイドでのみ使用されます。
   クライアントサイドのコードに含めないでください
-- Vercelの環境変数設定では、Production / Preview / Developmentの各環境に適切に設定してください
+- Dashboardでのフラグ作成・管理自体にはFLAGS_SECRETは不要です。
+  FLAGS_SECRETはToolbarオーバーライド機能と/.well-known/vercel/flagsエンドポイントの保護に使われます
