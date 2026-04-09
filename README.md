@@ -20,12 +20,141 @@ Vercel Feature FlagsとFlags SDKを使用したデモアプリケーションで
 - Vercel Toolbar (@vercel/toolbar)
 - Vercel Adapter (@sveltejs/adapter-vercel)
 
+## ファイル構成と変更箇所
+
+```
+src/
+  lib/
+    flags.ts              # フラグ定義（新規追加）
+  routes/
+    +page.server.ts       # サーバーサイドでフラグ評価（新規追加）
+    +page.svelte          # フラグ値に基づくUI切り替え（新規追加）
+  hooks.server.ts         # Flags SDKのサーバーフック（新規追加）
+vite.config.ts            # Vercel Toolbarプラグイン追加（変更）
+package.json              # flags, @vercel/toolbar 追加（変更）
+```
+
+## 実装の解説
+
+### 1. パッケージの追加 (package.json)
+
+```bash
+pnpm add flags @vercel/toolbar @sveltejs/adapter-vercel
+```
+
+### 2. フラグの定義 (src/lib/flags.ts)
+
+`flag()` でフラグを定義します。
+`key` がフラグの識別子、`options` がToolbarやFlags Explorerに表示される選択肢です。
+
+```typescript
+import { flag } from 'flags/sveltekit';
+
+// Boolean型: 新デザインの表示切り替え
+export const showNewDesign = flag<boolean>({
+  key: 'show-new-design',
+  description: 'Show the new design of the page',
+  defaultValue: false,
+  options: [
+    { value: true, label: 'New Design' },
+    { value: false, label: 'Old Design' }
+  ],
+  decide() {
+    return this.defaultValue as boolean;
+  }
+});
+
+// String型: バナーテキストのバリアント
+export const bannerText = flag<string>({
+  key: 'banner-text',
+  description: 'Campaign banner text variant',
+  defaultValue: 'none',
+  options: [
+    { value: 'spring', label: 'Spring Campaign' },
+    { value: 'summer', label: 'Summer Campaign' },
+    { value: 'none', label: 'No Banner' }
+  ],
+  decide() {
+    return this.defaultValue as string;
+  }
+});
+```
+
+### 3. サーバーフックの設定 (src/hooks.server.ts)
+
+`createHandle()` でFlags SDKをSvelteKitに統合します。
+`/.well-known/vercel/flags` エンドポイントが自動で作成され、Flags Explorerがフラグを検出できるようになります。
+
+```typescript
+import { createHandle } from 'flags/sveltekit';
+import { env } from '$env/dynamic/private';
+import * as flags from '$lib/flags';
+
+export const handle = createHandle({
+  secret: env.FLAGS_SECRET ?? '',
+  flags
+});
+```
+
+### 4. サーバーサイドでのフラグ評価 (src/routes/+page.server.ts)
+
+サーバーサイドのload関数でフラグを評価し、結果をクライアントに渡します。
+
+```typescript
+import { showNewDesign, bannerText } from '$lib/flags';
+import type { PageServerLoad } from './$types';
+
+export const load: PageServerLoad = async () => {
+  const [isNewDesign, banner] = await Promise.all([
+    showNewDesign(),
+    bannerText()
+  ]);
+
+  return {
+    showNewDesign: isNewDesign,
+    bannerText: banner
+  };
+};
+```
+
+### 5. クライアントサイドでの条件分岐 (src/routes/+page.svelte)
+
+フラグの値に応じてUIを切り替えます。
+
+```svelte
+<script lang="ts">
+  import type { PageData } from './$types';
+  let { data }: { data: PageData } = $props();
+</script>
+
+<!-- デザインの切り替え -->
+{#if data.showNewDesign}
+  <!-- カード形式の新デザイン -->
+{:else}
+  <!-- リスト形式の旧デザイン -->
+{/if}
+
+<!-- バナーの切り替え -->
+{#if data.bannerText === 'spring'}
+  <div class="banner spring">春キャンペーン: 全品20%オフ!</div>
+{:else if data.bannerText === 'summer'}
+  <div class="banner summer">夏キャンペーン: 5,000円以上で送料無料!</div>
+{/if}
+```
+
+### 6. Vite設定にToolbarプラグインを追加 (vite.config.ts)
+
+```typescript
+import { sveltekit } from '@sveltejs/kit/vite';
+import { defineConfig } from 'vite';
+import { vercelToolbar } from '@vercel/toolbar/plugins/vite';
+
+export default defineConfig({
+  plugins: [vercelToolbar(), sveltekit()]
+});
+```
+
 ## セットアップ
-
-### 前提条件
-
-- Node.js (LTS版)
-- pnpm
 
 ### インストール
 
@@ -51,10 +180,9 @@ pnpm build
 
 ### FLAGS_SECRET
 
-Flags SDKがフラグ値の署名・検証に使用するシークレットキーです。
-Vercelのプロジェクト設定 > Environment Variablesから設定してください。
+Flags SDKがToolbarオーバーライドの暗号化/復号に使用するシークレットキーです。
 
-生成方法の例:
+生成方法:
 
 ```
 node -e "console.log(crypto.randomBytes(32).toString('base64url'))"
@@ -128,10 +256,29 @@ node -e "console.log(crypto.randomBytes(32).toString('base64url'))"
 2. 片方のブラウザでのみVercel Toolbarからフラグをオーバーライドします
 3. オーバーライドした側のみUIが変化し、もう片方は影響を受けないことを確認します
 
+## フラグの評価フロー
+
+```
+1. ユーザーがページにアクセス
+   ↓
+2. SvelteKitのserver load関数が実行される
+   ↓
+3. Flags SDKがフラグの値を評価:
+   a. ToolbarのオーバーライドCookieがあるか確認
+      → あればFLAGS_SECRETで復号し、その値を使用
+   b. Vercel Flags Dashboardの設定を確認
+      → ターゲティングルールを評価
+   c. どちらもなければdecide()のデフォルト値を使用
+   ↓
+4. 評価された値がPageDataとしてSvelteコンポーネントに渡される
+   ↓
+5. コンポーネントが値に基づいて条件付きレンダリング
+```
+
 ## セキュリティに関する注意事項
 
 - FLAGS_SECRETは外部に公開しないでください。
-  この値が漏洩すると、第三者がフラグ値を改ざんできる可能性があります。
+  この値が漏洩すると、第三者がフラグ値を改ざんできる可能性があります
 - FLAGS_SECRETはサーバーサイドでのみ使用されます。
-  クライアントサイドのコードに含めないでください。
-- Vercelの環境変数設定では、Production / Preview / Developmentの各環境に適切に設定してください。
+  クライアントサイドのコードに含めないでください
+- Vercelの環境変数設定では、Production / Preview / Developmentの各環境に適切に設定してください
